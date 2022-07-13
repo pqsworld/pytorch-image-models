@@ -57,9 +57,15 @@ try:
 except AttributeError:
     pass
 
+try:
+    from functorch.compile import memory_efficient_fusion
+
+    has_functorch = True
+except ImportError as e:
+    has_functorch = False
+
 torch.backends.cudnn.benchmark = True
 _logger = logging.getLogger("validate")
-
 
 parser = argparse.ArgumentParser(description="PyTorch ImageNet Validation")
 parser.add_argument(
@@ -68,12 +74,7 @@ parser.add_argument(
     default=True,
     help="transfrom 1 channels image to 3image in Transforms.Compose",
 )
-parser.add_argument(
-    "data",
-    default="/hdd/file-input/panq/dataset/noid_6159_newmaterial",
-    metavar="DIR",
-    help="path to dataset",
-)
+parser.add_argument("data", metavar="DIR", help="path to dataset")
 parser.add_argument(
     "--dataset",
     "-d",
@@ -130,6 +131,12 @@ parser.add_argument(
     type=int,
     metavar="N N N",
     help="Input all image dimensions (d h w, e.g. --input-size 3 224 224), uses model default if empty",
+)
+parser.add_argument(
+    "--use-train-size",
+    action="store_true",
+    default=False,
+    help="force use of train input size, even when test size is specified in pretrained cfg",
 )
 parser.add_argument(
     "--crop-pct",
@@ -251,11 +258,18 @@ parser.add_argument(
     action="store_true",
     help="use ema version of weights if present",
 )
-parser.add_argument(
+scripting_group = parser.add_mutually_exclusive_group()
+scripting_group.add_argument(
     "--torchscript",
     dest="torchscript",
     action="store_true",
-    help="convert model torchscript for inference",
+    help="torch.jit.script the full model",
+)
+scripting_group.add_argument(
+    "--aot-autograd",
+    default=False,
+    action="store_true",
+    help="Enable AOT Autograd support. (It's recommended to use this option with `--fuser nvfuser` together)",
 )
 parser.add_argument(
     "--fuser",
@@ -267,6 +281,7 @@ parser.add_argument(
     "--results-file",
     default="/home/panq/vendor/pytorch-image-models/out/valid",
     type=str,
+    metavar="FILENAME",
     help="Output FOLDER csv file for validation results (summary)",
 )
 parser.add_argument(
@@ -331,17 +346,21 @@ def validate(args):
     _logger.info("Model %s created, param count: %d" % (args.model, param_count))
 
     data_config = resolve_data_config(
-        vars(args), model=model, use_test_size=True, verbose=True
+        vars(args), model=model, use_test_size=not args.use_train_size, verbose=True
     )
     test_time_pool = False
     if args.test_pool:
-        model, test_time_pool = apply_test_time_pool(
-            model, data_config, use_test_size=True
-        )
+        model, test_time_pool = apply_test_time_pool(model, data_config)
 
     if args.torchscript:
         torch.jit.optimized_execution(True)
-        model = torch.jit.script(model)
+        model = torch.jit.trace(
+            model,
+            example_inputs=torch.randn((args.batch_size,) + data_config["input_size"]),
+        )
+    if args.aot_autograd:
+        assert has_functorch, "functorch is needed for --aot-autograd"
+        model = memory_efficient_fusion(model)
 
     model = model.cuda()
     if args.apex_amp:

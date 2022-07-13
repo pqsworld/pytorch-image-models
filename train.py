@@ -90,7 +90,7 @@ except ImportError as e:
     has_functorch = False
 
 torch.backends.cudnn.benchmark = True
-CUDA_LAUNCH_BLOCKING = 1
+# CUDA_LAUNCH_BLOCKING = 1
 
 _logger = logging.getLogger("train")
 
@@ -882,6 +882,8 @@ def main():
     args.world_size = 1
     args.rank = 0  # global rank
     if args.distributed:
+        if "LOCAL_RANK" in os.environ:
+            args.local_rank = int(os.getenv("LOCAL_RANK"))
         args.device = "cuda:%d" % args.local_rank
         torch.cuda.set_device(args.local_rank)
         torch.distributed.init_process_group(backend="nccl", init_method="env://")
