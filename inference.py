@@ -87,6 +87,7 @@ def main():
         input_size=config['input_size'],
         batch_size=args.batch_size,
         use_prefetcher=True,
+        channels_1to3=True,
         interpolation=config['interpolation'],
         mean=config['mean'],
         std=config['std'],
