@@ -1,0 +1,221 @@
+data_dir: # temp invalid
+    "/hdd/file-input/panq/dataset/noid_6159"
+dataset: # dataset type (ImageFolder/ImageTar if empty)
+    "" # image_folder imagenet places365 inaturalist
+train_split: # "dataset train split (default: train)"
+    "train"
+val_split:
+    "valid" # or eval
+dataset_download: # if not present and supported (TFDS, torch)
+    False
+class_map: # PARA_ImageDataset
+    ""
+# Model parameters
+model:
+    #"mobilenetv3_small_100"S
+    "mobilevit_s"
+pretrained:
+    True
+initial_checkpoint: # path of checkpoint to load after model is initialized
+    "/home/panq/vendor/pytorch-image-models/out/mobilevit/20220710-195704-mobilevit_s-32/model_best.pth.tar"
+resume:
+    ~
+no_resume_opt: # resume without loss and optimizer
+    False
+num_classes:
+    2
+gp: # Global pool type, one of (fast, avg, max, avgmax, avgmaxc). Model default if None.
+    ~
+img_size:
+    ~
+input_size: # input_size overrides in_chans
+    [1,160,32]
+crop_pct: # Resize scale
+    ~
+mean: # normalize $1
+    [0.5649]
+std: # normalize $2
+    [0.0918]
+interpolation: # Image resize interpolation type (overrides model
+    ~
+batch_size:
+    44
+validation_batch_size:
+    ~
+channels_last: # whether channels is last in [NCHW]
+    False
+torchscript: # bool set layer config so that model is jit scriptable (not working for all models yet)
+    ~
+aot_autograd: # Enable AOT Autograd support. (It's recommended to use this option with `--fuser nvfuser` together)
+    False
+fuser: # Select jit fuser. One of ('', 'te', 'old', 'nvfuser')
+    ""
+grad_checkpointing: # Enable gradient checkpointing through model blocks/stages
+    False
+# Optimizer parameters
+opt: # opt_lower[sgd,momentum,sgdp,adam,adamw,adamp,nadam,radam,adamx, adabelirf,adadelta,adagrad,adafactor,lamb,lambc,larc,nlarc,nlars,madgrad,madgradw,novograd,rmsprop,ramsproptf,adahessian,fusedsgd,fusedmomentum,fusedadam,fusedadamw,fusedlamb,fusednovograd,,]
+    "adamw"
+opt_eps: # Optimizer Epsilon (default: None, use opt default)
+    ~
+opt_betas: # Optimizer Betas (default: None, use opt default)
+    ~
+momentum: # momentum for momentum based optimizers (others may use betas via kwargs)
+    0.9
+weight_decay: # default:2e-5
+    2e-5
+clip_grad: # Clip gradient norm (default: None, no clipping)
+    ~
+clip_mode: # Gradient clipping mode. One of ("norm", "value", "agc")
+    "norm"
+layer_decay: # BEiT:layer-wise learning rate decay (default: None)
+    ~
+# Learning rate schedule parameters
+sched:
+    "plateau" # [cosine tanh step multistep plateau poly]
+lr:
+    0.02
+lr_noise: #learning rate noise on/off epoch percentages
+    ~
+lr_noise_pct: # TODO:"learning rate noise limit percent (default: 0.67)
+    0.67
+lr_noise_std: # learning rate noise std-dev (default: 1.0)
+    1.0
+lr_cycle_mul: # learning rate cycle len multiplier (default: 1.0
+    1.0
+lr_cycle_decay: # amount to decay each learning rate cycle (default: 0.5)
+    0.5
+lr_cycle_limit: # learning rate cycle limit, cycles enabled if > 1
+    1
+lr_k_decay: # learning rate k-decay for cosine/poly (default: 1.0)
+    1.0
+warmup_lr: # warmup learning rate (default: 0.0001)
+    0.0001
+min_lr:
+    2e-6
+epochs:
+    200
+epoch_repeats: # epoch repeat multiplier (number of times to repeat dataset epoch per train epoch
+    0.0
+start_epoch: # manual epoch number (useful on restarts)
+    ~
+decay_milestones: # list of decay epoch indices for multistep lr. must be increasing
+    [30,60]
+decay_epochs: # epoch interval to decay LR
+    100
+warmup_epochs: # epochs to warmup LR, if scheduler supports
+    3
+cooldown_epochs: # epochs to cooldown LR at min_lr, after cyclic schedule ends
+    10
+patience_epochs: # patience epochs for Plateau LR scheduler (default: 10
+    10
+decay_rate: # LR decay rate (default: 0.1)
+    0.1
+# Augmentation & regularization parameters
+no_aug:
+    True
+scale:
+    [0.08, 1.0]
+ratio:
+    [0.75, 1.3333333333333333]
+color_jitter:
+    0.4
+aa:
+    ~
+aug_repeats:
+    0
+aug_splits:
+    0
+jsd_loss:
+    False
+bce_loss:
+    False
+bce_target_thresh:
+    ~
+reprob:
+    0.0
+resplit:
+    False
+mixup:
+    0.0
+cutmix:
+    0.0
+cutmix_minmax:
+    ~
+mixup_prob:
+    1.0
+mixup_switch_prob:
+    0.5
+mixup_mode:
+    "batch"
+mixup_off_epoch:
+    0
+smoothing:
+    0.1
+train_interpolation:
+    "random"
+drop:
+    0.1
+drop_connect:
+    ~
+drop_path:
+    ~
+drop_block:
+    ~
+# Batch norm parameters (only works with gen_efficientnet based models currently
+
+bn_momentum:
+    ~
+bn_eps:
+    ~
+sync_bn:
+    ~
+dist_bn:
+    "reduce"
+split_bn:
+    ~
+# Model Exponential Moving Average
+model_ema:
+    False
+model_ema_force_cpu:
+    False
+model_ema_decay:
+    0.9998
+# Misc
+seed:
+    1998
+worker_seeding:
+   all
+log_interval: # how many batches to wait before logging training status
+    1
+recovery_interval:
+    0
+checkpoint_hist:
+    10
+workers:
+    20
+save_images:
+    False
+amp:
+    True
+apex_amp:
+    False
+native_amp:
+    False
+no_ddp_bb:
+    False
+pin_mem:
+    False
+no_prefetcher:
+    False
+output:
+    "/home/panq/vendor/pytorch-image-models/out/mobilevit_1"
+experiment:
+    ""
+eval_metric:
+    "top1"
+tta:
+    1
+use_multi_epochs_loader:
+    False
+log_wandb:
+    False
