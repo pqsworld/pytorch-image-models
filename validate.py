@@ -8,7 +8,10 @@ canonical PyTorch, standard Python style, and good performance. Repurpose as you
 Hacked together by Ross Wightman (https://github.com/rwightman)
 """
 import argparse
+import imp
 import os
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 import csv
 import glob
 import json
@@ -18,6 +21,9 @@ import logging
 import torch
 import torch.nn as nn
 import torch.nn.parallel
+import torchvision
+import torchvision.transforms as transforms
+from pathlib import Path
 from collections import OrderedDict
 from contextlib import suppress
 
@@ -35,11 +41,19 @@ from timm.data import (
     RealLabelsImagenet,
 )
 from timm.utils import (
-    accuracy,
+    accuracy_pos_neg,
+    accuracy_pos_neg_class,
     AverageMeter,
     natural_key,
     setup_default_logging,
     set_jit_fuser,
+)
+
+from timm.data.dataset import (
+    IterableImageDataset,
+    ImageDataset,
+    ImageFolder_LF,
+    ImageFolder_LFID,
 )
 
 has_apex = False
@@ -67,7 +81,30 @@ except ImportError as e:
 torch.backends.cudnn.benchmark = True
 _logger = logging.getLogger("validate")
 
+
 parser = argparse.ArgumentParser(description="PyTorch ImageNet Validation")
+parser.add_argument(
+    "--checkpoint",
+    # default=r"/home/panq/vendor/pytorch-image-models/mn_adamw/20220718-113954-mobilenetv3_small_100/model_best.pth.tar",
+    # default=r"/home/panq/vendor/out/train/lif/pqcfg_4321_1/model_best.pth.tar",
+    # default=r"/home/panq/vendor/out/train/lif/pqcfg_4321/model_best.pth.tar",
+    default=r"/home/panq/vendor/out/train/pq_lif_3/4321/last.pth.tar",
+    # default=r"/home/panq/vendor/pytorch-image-models/out/mn_conv_para_plat/20220718-233251-mobilenetv3_small_100/model_best.pth.tar",
+    # default=r"/home/panq/vendor/pytorch-image-models/output/train/20220708-151123-mobilenetv3_small_100-32/model_best.pth.tar",
+    # default=r"/home/panq/vendor/pytorch-image-models/out/300_cos/20220719-144319-mobilenetv3_small_100/model_best.pth.tar",
+    # default=r"/home/panq/vendor/out/train/spoof/class4/4/model_best.pth.tar",
+    # default=r"/home/panq/vendor/pytorch-image-models/out/300_plat/20220719-193332-mobilenetv3_small_100/model_best.pth.tar",
+    # default="out/mobilevit2_3/20220718-080118-mobilevitv2_050",
+    type=str,
+    metavar="PATH",
+    help="path to latest checkpoint (default: none)",
+)
+parser.add_argument(
+    "--split-pos-neg",
+    action="store_false",
+    default=True,
+    help="split accuracy to positive and negitive spaces",
+)
 parser.add_argument(
     "--channels-1to3",
     action="store_false",
@@ -79,13 +116,13 @@ parser.add_argument(
     "--dataset",
     "-d",
     metavar="NAME",
-    default="",
+    default="torch/id",
     help="dataset type (default: ImageFolder/ImageTar if empty)",
 )
 parser.add_argument(
     "--split",
     metavar="NAME",
-    default="validation",
+    default="test",
     help="dataset split (default: validation)",
 )
 parser.add_argument(
@@ -98,6 +135,8 @@ parser.add_argument(
     "--model",
     "-m",
     metavar="NAME",
+    # default="mobilevitv2_050",
+    # default="mobilevit_s",
     default="mobilenetv3_small_100",
     help="model architecture (default: dpn92)",
 )
@@ -149,7 +188,7 @@ parser.add_argument(
     "--mean",
     type=float,
     nargs="+",
-    default=[0.5649],
+    default=None,
     metavar="MEAN",
     help="Override mean pixel value of dataset",
 )
@@ -157,13 +196,13 @@ parser.add_argument(
     "--std",
     type=float,
     nargs="+",
-    default=[0.0918],
+    default=None,
     metavar="STD",
     help="Override std deviation of of dataset",
 )
 parser.add_argument(
     "--interpolation",
-    default="",
+    default=None,
     type=str,
     metavar="NAME",
     help="Image resize interpolation type (overrides model)",
@@ -187,39 +226,33 @@ parser.add_argument(
 )
 parser.add_argument(
     "--log-freq",
-    default=10,
+    default=1,
     type=int,
     metavar="N",
     help="batch logging frequency (default: 10)",
 )
-parser.add_argument(
-    "--checkpoint",
-    default="/home/panq/vendor/pytorch-image-models/output/train/20220708-151123-mobilenetv3_small_100-32/model_best.pth.tar",
-    type=str,
-    metavar="PATH",
-    help="path to latest checkpoint (default: none)",
-)
+
 parser.add_argument(
     "--pretrained",
     dest="pretrained",
-    default="false",
+    default=False,
     action="store_true",
     help="use pre-trained model",
 )
-parser.add_argument("--num-gpu", type=int, default=4, help="Number of GPUS to use")
+parser.add_argument("--num-gpu", type=int, default=1, help="Number of GPUS to use")
 parser.add_argument(
     "--test-pool", dest="test_pool", action="store_true", help="enable test time pool"
 )
 parser.add_argument(
     "--no-prefetcher",
     action="store_true",
-    default=False,
+    default=True,
     help="disable fast prefetcher",
 )
 parser.add_argument(
     "--pin-mem",
     action="store_true",
-    default=False,
+    default=True,
     help="Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.",
 )
 parser.add_argument(
@@ -256,6 +289,7 @@ parser.add_argument(
     "--use-ema",
     dest="use_ema",
     action="store_true",
+    default=False,
     help="use ema version of weights if present",
 )
 scripting_group = parser.add_mutually_exclusive_group()
@@ -279,7 +313,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--results-file",
-    default="/home/panq/vendor/pytorch-image-models/out/valid",
+    default="/home/panq/vendor/out/valid",
     type=str,
     metavar="FILENAME",
     help="Output FOLDER csv file for validation results (summary)",
@@ -298,6 +332,63 @@ parser.add_argument(
     metavar="FILENAME",
     help="Valid label indices txt file for validation of partial label space",
 )
+
+
+def accuracy_class(output, target, path):
+    """Computes the accuracy over the {all,positive and negative classes} predictions for the specified values"""
+    accu = {}
+
+    _, pred = output.topk(1, 1, True, True)
+    pred = pred.t()
+    # TARGET calued to shape of PRED.saved for pos_nev.
+    targ = target.reshape(1, -1).expand_as(pred)
+    correct = pred.eq(targ)
+    corr_class = torch.squeeze(correct)
+    for i in range(len(target)):
+        log = ''
+        if '/1neg/假手指按物料整理第1和2类' in path[i]:
+            log = 'class12'
+        elif '/1neg/假手指按物料整理第3类' in path[i]:
+            log = 'class3'
+        elif '/1neg/假手指按物料整理第4类' in path[i]:
+            log = 'class4'
+        elif '/0fp/' in path[i]:
+            log = 'class0'
+        else:
+            print("data error")
+            input()
+
+        if corr_class[i] == True:
+            log = log + ' pred1'
+        else:
+            log = log + ' pred0'
+        _logger.info(path[i] + log)
+    accu["all"] = correct[:1].reshape(-1).float().sum(0) * 100.0 / target.size(0)
+    assert accu["all"] == accu["all"]
+
+    correct_pos = (pred == 1) * (targ == 1)
+    correct_neg = (pred == 0) * (targ == 0)
+    sum0 = (target == 0).sum(0)
+    sum1 = (target == 1).sum(0)
+
+    if sum1 == 0:
+        accu["pos"] = torch.Tensor([100.0]).to(target.data.device)
+    else:
+        accu["pos"] = (
+            correct_pos[:1].reshape(-1).float().sum(0) * 100.0 / (target == 1).sum(0)
+        )
+
+    if sum0 == 0:
+        accu["neg"] = torch.Tensor([100.0]).to(target.data.device)
+    else:
+        accu["neg"] = (
+            correct_neg[:1].reshape(-1).float().sum(0) * 100.0 / (target == 0).sum(0)
+        )
+
+    assert accu["pos"] == accu["pos"]
+    assert accu["neg"] == accu["neg"]
+
+    return accu
 
 
 def validate(args):
@@ -373,7 +464,12 @@ def validate(args):
         model = torch.nn.DataParallel(model, device_ids=list(range(args.num_gpu)))
 
     criterion = nn.CrossEntropyLoss().cuda()
-
+    test_transform = transforms.Compose(
+        [
+            transforms.Grayscale(1),
+            transforms.ToTensor(),
+        ]
+    )
     dataset = create_dataset(
         root=args.data,
         name=args.dataset,
@@ -381,8 +477,9 @@ def validate(args):
         download=args.dataset_download,
         load_bytes=args.tf_preprocessing,
         class_map=args.class_map,
+        transforms=test_transform,
     )
-
+    test_set = ImageFolder_LF(args.data, test_transform)
     if args.valid_labels:
         with open(args.valid_labels, "r") as f:
             valid_labels = {int(line.rstrip()) for line in f}
@@ -412,11 +509,14 @@ def validate(args):
         pin_memory=args.pin_mem,
         tf_preprocessing=args.tf_preprocessing,
     )
-
+    val_loader = torch.utils.data.DataLoader(
+        dataset, batch_size=args.batch_size, shuffle=False, num_workers=16
+    )
     batch_time = AverageMeter()
     losses = AverageMeter()
-    top1 = AverageMeter()
-    top5 = AverageMeter()
+    v_all = AverageMeter()
+    v_pos = AverageMeter()
+    v_neg = AverageMeter()
 
     model.eval()
     with torch.no_grad():
@@ -430,7 +530,7 @@ def validate(args):
             model(input)
 
         end = time.time()
-        for batch_idx, (input, target) in enumerate(loader):
+        for batch_idx, (input, target, path) in enumerate(loader):
             if args.no_prefetcher:
                 target = target.cuda()
                 input = input.cuda()
@@ -447,12 +547,14 @@ def validate(args):
 
             if real_labels is not None:
                 real_labels.add_result(output)
+            accuracy_class(output.detach(), target, path)
 
             # measure accuracy and record loss
-            acc1, acc5 = accuracy(output.detach(), target, topk=(1, 5))
+            accu = accuracy_pos_neg(output.detach(), target, split_pos_neg=True)
             losses.update(loss.item(), input.size(0))
-            top1.update(acc1.item(), input.size(0))
-            top5.update(acc5.item(), input.size(0))
+            v_all.update(accu["all"].item(), target.size(0))
+            v_pos.update(accu["pos"].item(), (target == 1).sum(0).item())
+            v_neg.update(accu["neg"].item(), (target == 0).sum(0).item())
 
             # measure elapsed time
             batch_time.update(time.time() - end)
@@ -463,29 +565,35 @@ def validate(args):
                     "Test: [{0:>4d}/{1}]  "
                     "Time: {batch_time.val:.3f}s ({batch_time.avg:.3f}s, {rate_avg:>7.2f}/s)  "
                     "Loss: {loss.val:>7.4f} ({loss.avg:>6.4f})  "
-                    "Acc@1: {top1.val:>7.3f} ({top1.avg:>7.3f})  "
-                    "Acc@5: {top5.val:>7.3f} ({top5.avg:>7.3f})".format(
+                    "Acc@All: {va.val:>7.4f} ({va.avg:>7.4f})  "
+                    "Acc@Pos: {vp.val:>7.4f} ({vp.avg:>7.4f})  "
+                    "Acc@Neg: {vn.val:>7.4f} ({vn.avg:>7.4f})  ".format(
                         batch_idx,
                         len(loader),
                         batch_time=batch_time,
                         rate_avg=input.size(0) / batch_time.avg,
                         loss=losses,
-                        top1=top1,
-                        top5=top5,
+                        va=v_all,
+                        vp=v_pos,
+                        vn=v_neg,
                     )
                 )
 
     if real_labels is not None:
         # real labels mode replaces topk values at the end
+        # FIXME # pqsworld : this is not Now
         top1a, top5a = real_labels.get_accuracy(k=1), real_labels.get_accuracy(k=5)
     else:
-        top1a, top5a = top1.avg, top5.avg
+        v_all, v_pos, v_neg = v_all.avg, v_pos.avg, v_neg.avg
+
     results = OrderedDict(
         model=args.model,
-        top1=round(top1a, 4),
-        top1_err=round(100 - top1a, 4),
-        top5=round(top5a, 4),
-        top5_err=round(100 - top5a, 4),
+        acc_all=round(v_all, 4),
+        acc_all_err=round(100 - v_all, 4),
+        acc_pos=round(v_pos, 4),
+        acc_pos_err=round(100 - v_pos, 4),
+        acc_neg=round(v_neg, 4),
+        acc_neg_err=round(100 - v_neg, 4),
         param_count=round(param_count / 1e6, 2),
         img_size=data_config["input_size"][-1],
         crop_pct=crop_pct,
@@ -493,8 +601,13 @@ def validate(args):
     )
 
     _logger.info(
-        " * Acc@1 {:.3f} ({:.3f}) Acc@5 {:.3f} ({:.3f})".format(
-            results["top1"], results["top1_err"], results["top5"], results["top5_err"]
+        " * Acc@All {:.3f} ({:.3f}) Acc@Pos {:.3f} ({:.3f}) Acc@Neg {:.3f} ({:.3f})".format(
+            results["acc_all"],
+            results["acc_all_err"],
+            results["acc_pos"],
+            results["acc_pos_err"],
+            results["acc_neg"],
+            results["acc_neg_err"],
         )
     )
 
@@ -525,13 +638,14 @@ def _try_run(args, initial_batch_size):
 
 
 def main():
-    setup_default_logging()
     args = parser.parse_args()
+    experiment = args.checkpoint.split('/')[-2] + '_last.log'
+    setup_default_logging(log_path="out/logger/" + experiment)
     model_cfgs = []
     model_names = []
     if os.path.isdir(args.checkpoint):
         # validate all checkpoints in a path with same model
-        checkpoints = glob.glob(args.checkpoint + "/*.pth.tar")
+        checkpoints = glob.glob(args.checkpoint + "/*.f.tar")
         checkpoints += glob.glob(args.checkpoint + "/*.pth")
         model_names = list_models(args.model)
         model_cfgs = [(args.model, c) for c in sorted(checkpoints, key=natural_key)]
@@ -575,7 +689,7 @@ def main():
                 results.append(r)
         except KeyboardInterrupt as e:
             pass
-        results = sorted(results, key=lambda x: x["top1"], reverse=True)
+        results = sorted(results, key=lambda x: x["acc_all"], reverse=True)
         if len(results):
             write_results(results_file, results)
     else:

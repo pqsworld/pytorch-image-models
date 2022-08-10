@@ -17,7 +17,7 @@ model:
 pretrained:
     True
 initial_checkpoint: # path of checkpoint to load after model is initialized
-    ~
+    "/home/panq/vendor/pytorch-image-models/out/mobilevit/20220710-195704-mobilevit_s-32/model_best.pth.tar"
 resume:
     ~
 no_resume_opt: # resume without loss and optimizer
@@ -54,7 +54,7 @@ grad_checkpointing: # Enable gradient checkpointing through model blocks/stages
     False
 # Optimizer parameters
 opt: # opt_lower[sgd,momentum,sgdp,adam,adamw,adamp,nadam,radam,adamx, adabelirf,adadelta,adagrad,adafactor,lamb,lambc,larc,nlarc,nlars,madgrad,madgradw,novograd,rmsprop,ramsproptf,adahessian,fusedsgd,fusedmomentum,fusedadam,fusedadamw,fusedlamb,fusednovograd,,]
-    "sgd"
+    "adamw"
 opt_eps: # Optimizer Epsilon (default: None, use opt default)
     ~
 opt_betas: # Optimizer Betas (default: None, use opt default)
@@ -149,8 +149,12 @@ mixup_mode:
     "batch"
 mixup_off_epoch:
     0
+smoothing:
+    0.1
 train_interpolation:
     "random"
+drop:
+    0.1
 drop_connect:
     ~
 drop_path:
@@ -192,7 +196,7 @@ workers:
 save_images:
     False
 amp:
-    True
+    False
 apex_amp:
     False
 native_amp:
@@ -204,11 +208,11 @@ pin_mem:
 no_prefetcher:
     False
 output:
-    "/home/panq/vendor/pytorch-image-models/out/mobilevit"
+    "/home/panq/vendor/pytorch-image-models/out/mobilevit_1"
 experiment:
     ""
 eval_metric:
-    "top1"
+    "v_all"
 tta:
     1
 use_multi_epochs_loader:

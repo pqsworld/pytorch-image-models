@@ -8,7 +8,7 @@ train_split: # "dataset train split (default: train)"
     "train"
 val_split:
     "valid" # or eval
-dataset_download: # if not present and supported (TFDS, torch)
+dataset_download: # if not present and supported (TFDS, torch )
     False
 class_map: # PARA_ImageDataset
     ""
@@ -43,7 +43,7 @@ std: # normalize $2
 interpolation: # Image resize interpolation type (overrides model
     ~
 batch_size:
-    256
+    512
 validation_batch_size:
     ~
 channels_last: # whether channels is last in [NCHW]
@@ -97,7 +97,7 @@ warmup_lr: # warmup learning rate (default: 0.0001)
 min_lr:
     2e-6
 epochs:
-    2
+    200
 epoch_repeats: # epoch repeat multiplier (number of times to repeat dataset epoch per train epoch
     0.0
 start_epoch: # manual epoch number (useful on restarts)
@@ -212,7 +212,7 @@ output:
 experiment:
     ""
 eval_metric:
-    "top1"
+    "v_all"
 tta:
     1
 use_multi_epochs_loader:

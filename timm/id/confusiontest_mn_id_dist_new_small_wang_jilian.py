@@ -390,22 +390,22 @@ if __name__ == "__main__":
                 ) = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
                 for batch_num, (data, target, temples, path) in enumerate(val_loader):
                     data, target, temples = data.cuda(), target.cuda(), temples.cuda()
-                    _, out3 = net0(data)
+                    out3 = net0(data)
                     # print(out3.shape)
                     p = softmax(out3)
                     p = p[:, 0]
-                    pred_ben = [0 if i * 65536 > thr else 1 for i in p]
-                    pred_ben = torch.tensor(pred_ben).cuda()
+                    pred = [0 if i * 65536 > thr else 1 for i in p]
+                    pred = torch.tensor(pred).cuda()
                     # print(p)
-                    # pred_ben = out3.data.max(1)[1]
+                    # pred = out3.data.max(1)[1]
                     k = target.data.size()[0]
-                    correct += pred_ben.eq(target.data).cpu().sum()
+                    correct += pred.eq(target.data).cpu().sum()
                     size += k
                     correct0 += (
                         torch.tensor(
                             [
                                 1 if (i == j and i == 0) else 0
-                                for (i, j) in zip(pred_ben, target)
+                                for (i, j) in zip(pred, target)
                             ]
                         )
                         .cpu()
@@ -416,7 +416,7 @@ if __name__ == "__main__":
                         torch.tensor(
                             [
                                 1 if (i == j and i == 1) else 0
-                                for (i, j) in zip(pred_ben, target)
+                                for (i, j) in zip(pred, target)
                             ]
                         )
                         .cpu()
@@ -438,120 +438,3 @@ if __name__ == "__main__":
                         size1,
                     )
                 )
-    for thr_dist in range(2, 9):  # [0.8657407407407406]:#(1,20):
-        with tqdm(total=len(val_loader), position=0, ncols=80) as pbar:
-            (
-                total,
-                test_loss,
-                test_correct,
-                test_loss_ret,
-                correct,
-                correct_id,
-                size,
-                correct0,
-                correct0_id,
-                size0,
-                correct1,
-                correct1_id,
-                size1,
-            ) = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-            for batch_num, (data, target, temples, path) in enumerate(val_loader):
-                data, target, temples = data.cuda(), target.cuda(), temples.cuda()
-                out1 = C(G(data))
-                # feat = feat.reshape(feat.size(0), -1)
-                # out1 = C(feat)
-                temples = temples.view(-1, 1, data.size(2), data.size(3))
-                out2 = C(G(temples))
-                out2 = out2.view(out1.size(0), -1, 2)
-                # print(out2.shape)
-                out1 = out1.view(out1.size(0), 1, 2).repeat(1, out2.size(1), 1)
-                # print(out1.shape)
-                out1 = out1.view(-1, 2)
-                out2 = out2.view(-1, 2)
-                dist = F.pairwise_distance(out1, out2)
-                pred = [1 if i > thr_dist / 10 else (0 if i < 0.2 else 0) for i in dist]
-                # pred = [1 if i>thr/10 else (-19 if i<0.1 else 0) for i in dist ]
-                pred = torch.tensor(pred).cuda()
-                pred = pred.view(-1, 20)
-                pred = pred.sum(axis=1, keepdim=False)
-                pred = [0 if i <= 10 else 1 for i in pred]
-                pred = torch.tensor(pred).cuda()
-                _, out3 = net0(data)
-                p = softmax(out3)
-                p = p[:, 0]
-                pred_ben = [0 if i * 65536 > thr else 1 for i in p]
-                pred_ben = torch.tensor(pred_ben).cuda()
-                pred_jilian = [
-                    0 if (i == j and i == 0) else 1 for (i, j) in zip(pred, pred_ben)
-                ]
-                pred_jilian = torch.tensor(pred_jilian).cuda()
-                k = target.data.size()[0]
-                correct += pred_jilian.eq(target.data).cpu().sum()
-                correct_id += pred.eq(target.data).cpu().sum()
-                size += k
-                correct_list = [
-                    1 if (i == j and i == 0) else 0
-                    for (i, j) in zip(pred_jilian, target)
-                ]
-                correct0 += torch.tensor(correct_list).cpu().sum()
-                correct0_id += (
-                    torch.tensor(
-                        [
-                            1 if (i == j and i == 0) else 0
-                            for (i, j) in zip(pred, target)
-                        ]
-                    )
-                    .cpu()
-                    .sum()
-                )
-                size0 += -(target - 1).cpu().sum()
-                correct1 += (
-                    torch.tensor(
-                        [
-                            1 if (i == j and i == 1) else 0
-                            for (i, j) in zip(pred_jilian, target)
-                        ]
-                    )
-                    .cpu()
-                    .sum()
-                )
-                correct1_id += (
-                    torch.tensor(
-                        [
-                            1 if (i == j and i == 1) else 0
-                            for (i, j) in zip(pred, target)
-                        ]
-                    )
-                    .cpu()
-                    .sum()
-                )
-                size1 += target.cpu().sum()
-                pbar.update(1)
-            print(
-                "v10+id  dist_thr:{} total acc:{}/{}={:.2f}%,class0 err:{:.2f}%({}/{}),class1 err:{:.2f}%({}/{})".format(
-                    thr_dist / 10,
-                    correct,
-                    size,
-                    correct / size * 100,
-                    (size0 - correct0) / size0 * 100,
-                    (size0 - correct0),
-                    size0,
-                    (size1 - correct1) / size1 * 100,
-                    (size1 - correct1),
-                    size1,
-                )
-            )
-            print(
-                "id  dist_thr:{} total acc:{}/{}={:.2f}%,class0 err:{:.2f}%({}/{}),class1 err:{:.2f}%({}/{})".format(
-                    thr_dist / 10,
-                    correct_id,
-                    size,
-                    correct_id / size * 100,
-                    (size0 - correct0_id) / size0 * 100,
-                    (size0 - correct0_id),
-                    size0,
-                    (size1 - correct1_id) / size1 * 100,
-                    (size1 - correct1_id),
-                    size1,
-                )
-            )

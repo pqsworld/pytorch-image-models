@@ -4,19 +4,36 @@ Hacked together by / Copyright 2021, Ross Wightman
 """
 import os
 
-from torchvision.datasets import CIFAR100, CIFAR10, MNIST, QMNIST, KMNIST, FashionMNIST, ImageNet, ImageFolder
+from torchvision.datasets import (
+    CIFAR100,
+    CIFAR10,
+    MNIST,
+    QMNIST,
+    KMNIST,
+    FashionMNIST,
+    ImageNet,
+    ImageFolder,
+)
+
 try:
     from torchvision.datasets import Places365
+
     has_places365 = True
 except ImportError:
     has_places365 = False
 try:
     from torchvision.datasets import INaturalist
+
     has_inaturalist = True
 except ImportError:
     has_inaturalist = False
 
-from .dataset import IterableImageDataset, ImageDataset
+from .dataset import (
+    IterableImageDataset,
+    ImageDataset,
+    ImageFolder_LF,
+    ImageFolder_LFID,
+)
 
 _TORCH_BASIC_DS = dict(
     cifar10=CIFAR10,
@@ -43,6 +60,7 @@ def _search_split(root, split):
             if os.path.exists(try_root):
                 return try_root
         return root
+
     if split_name in _TRAIN_SYNONYM:
         root = _try(_TRAIN_SYNONYM)
     elif split_name in _EVAL_SYNONYM:
@@ -51,19 +69,20 @@ def _search_split(root, split):
 
 
 def create_dataset(
-        name,
-        root,
-        split='validation',
-        search_split=True,
-        class_map=None,
-        load_bytes=False,
-        is_training=False,
-        download=False,
-        batch_size=None,
-        repeats=0,
-        **kwargs
+    name,
+    root,
+    split='validation',
+    search_split=True,
+    class_map=None,
+    load_bytes=False,
+    is_training=False,
+    download=False,
+    batch_size=None,
+    repeats=0,
+    transforms=None,
+    **kwargs,
 ):
-    """ Dataset factory method
+    """Dataset factory method
 
     In parenthesis after each arg are the type of dataset supported for each arg, one of:
       * folder - default, timm folder (or tar) based ImageDataset
@@ -98,7 +117,9 @@ def create_dataset(
             use_train = split in _TRAIN_SYNONYM
             ds = ds_class(train=use_train, **torch_kwargs)
         elif name == 'inaturalist' or name == 'inat':
-            assert has_inaturalist, 'Please update to PyTorch 1.10, torchvision 0.11+ for Inaturalist'
+            assert (
+                has_inaturalist
+            ), 'Please update to PyTorch 1.10, torchvision 0.11+ for Inaturalist'
             target_type = 'full'
             split_split = split.split('/')
             if len(split_split) > 1:
@@ -112,7 +133,9 @@ def create_dataset(
                 split = '2021_valid'
             ds = INaturalist(version=split, target_type=target_type, **torch_kwargs)
         elif name == 'places365':
-            assert has_places365, 'Please update to a newer PyTorch and torchvision for Places365 dataset.'
+            assert (
+                has_places365
+            ), 'Please update to a newer PyTorch and torchvision for Places365 dataset.'
             if split in _TRAIN_SYNONYM:
                 split = 'train-standard'
             elif split in _EVAL_SYNONYM:
@@ -128,16 +151,30 @@ def create_dataset(
                 # look for split specific sub-folder in root
                 root = _search_split(root, split)
             ds = ImageFolder(root, **kwargs)
+        elif name == 'id':
+            if search_split and os.path.isdir(root):
+                # look for split specific sub-folder in root
+                root = _search_split(root, split)
+            ds = ImageFolder_LF(root, transforms)
         else:
             assert False, f"Unknown torchvision dataset {name}"
     elif name.startswith('tfds/'):
         ds = IterableImageDataset(
-            root, parser=name, split=split, is_training=is_training,
-            download=download, batch_size=batch_size, repeats=repeats, **kwargs)
+            root,
+            parser=name,
+            split=split,
+            is_training=is_training,
+            download=download,
+            batch_size=batch_size,
+            repeats=repeats,
+            **kwargs,
+        )
     else:
         # FIXME support more advance split cfg for ImageFolder/Tar datasets in the future
         if search_split and os.path.isdir(root):
             # look for split specific sub-folder in root
             root = _search_split(root, split)
-        ds = ImageDataset(root, parser=name, class_map=class_map, load_bytes=load_bytes, **kwargs)
+        ds = ImageDataset(
+            root, parser=name, class_map=class_map, load_bytes=load_bytes, **kwargs
+        )
     return ds

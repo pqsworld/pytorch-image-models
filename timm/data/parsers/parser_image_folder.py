@@ -19,7 +19,7 @@ def find_images_and_targets(
     folder: str,
     types: Optional[Union[List, Tuple, Set]] = None,
     class_to_idx: Optional[Dict] = None,
-    leaf_name_only: bool = True,
+    leaf_name_only: bool = False,
     sort: bool = True,
 ):
     """Walk folder recursively to discover images and map them to classes by folder names.

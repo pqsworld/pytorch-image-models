@@ -6,7 +6,8 @@ import torch.utils.data as data
 import os
 import torch
 import logging
-
+import torchvision
+from pathlib import Path
 from PIL import Image
 
 from .parsers import create_parser
@@ -15,6 +16,60 @@ _logger = logging.getLogger(__name__)
 
 
 _ERROR_RETRY = 50
+
+
+class ImageFolder_LF(torchvision.datasets.ImageFolder):
+    def __init__(
+        self,
+        root,
+        transform=None,
+        target_transform=None,
+        loader=None,
+        is_valid_file=None,
+    ):
+        super(ImageFolder_LF, self).__init__(
+            root,
+            transform=transform,
+            target_transform=target_transform,
+            is_valid_file=is_valid_file,
+        )
+
+    def __getitem__(self, index):
+        path, target = self.samples[index]
+        sample = self.loader(path)
+        if self.transform is not None:
+            sample = self.transform(sample)
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+
+        return sample, target, path
+
+
+class ImageFolder_LFID(torchvision.datasets.ImageFolder):
+    def __init__(
+        self,
+        root,
+        transform=None,
+        target_transform=None,
+        loader=None,
+        is_valid_file=None,
+    ):
+        super(Dataset_ID, self).__init__(
+            root,
+            transform=transform,
+            target_transform=target_transform,
+            is_valid_file=is_valid_file,
+        )
+
+    def __getitem__(self, index):
+        path, target = self.samples[index]
+        path = Path(path)
+        sample = self.loader(path)
+        # print(path)
+        if self.transform is not None:
+            sample = self.transform(sample)
+
+        return sample, target, str(path)
 
 
 class ImageDataset(data.Dataset):

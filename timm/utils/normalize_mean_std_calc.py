@@ -7,7 +7,7 @@ from tqdm import tqdm
 from time import time
 
 N_CHANNELS = 1
-data_dir = "/hdd/file-input/panq/dataset/noid_6159/ht/train"
+data_dir = "/hdd/file-input/panq/dataset/regray/old/train/0pos"
 
 data_transform = transforms.Compose(
     [
