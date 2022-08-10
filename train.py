@@ -945,9 +945,9 @@ def main():
     args.save_images = True
 
     if args.distributed:
-        if 'LOCAL_RANK' in os.environ:
-            args.local_rank = int(os.getenv('LOCAL_RANK'))
-        args.device = 'cuda:%d' % args.local_rank
+        if "LOCAL_RANK" in os.environ:
+            args.local_rank = int(os.getenv("LOCAL_RANK"))
+        args.device = "cuda:%d" % args.local_rank
         torch.cuda.set_device(args.local_rank)
         torch.distributed.init_process_group(backend="nccl", init_method="env://")
         args.world_size = torch.distributed.get_world_size()

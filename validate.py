@@ -84,7 +84,6 @@ torch.backends.cudnn.benchmark = True
 _logger = logging.getLogger('validate')
 
 
-
 parser = argparse.ArgumentParser(description="PyTorch ImageNet Validation")
 parser.add_argument(
     "--checkpoint",
