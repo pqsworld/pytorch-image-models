@@ -92,7 +92,7 @@ warmup_lr: # warmup learning rate (default: 0.0001)
 min_lr:
     2e-6
 epochs:
-    300
+    200
 epoch_repeats: # epoch repeat multiplier (number of times to repeat dataset epoch per train epoch
     0.0
 start_epoch: # manual epoch number (useful on restarts)
@@ -127,7 +127,7 @@ aug_splits:
 jsd_loss:
     False
 bce_loss:
-    False
+    True
 bce_target_thresh:
     ~
 reprob:
@@ -203,11 +203,11 @@ pin_mem:
 no_prefetcher:
     False
 output:
-    ""
+    "default_settings"
 experiment:
     ""
 eval_metric:
-    "top1"
+    "v_all"
 tta:
     1
 use_multi_epochs_loader:

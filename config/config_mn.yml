@@ -1,0 +1,56 @@
+data_dir: # temp invalid
+    "/hdd/file_input/panq/dataset/6159_split1"
+train_split: # "dataset train split (default: train)"
+    "train"
+val_split:
+    "valid" # or eval
+dataset_download: # if not present and supported (TFDS, torch)
+    False
+class_map: # PARA_ImageDataset
+    ""
+# Model parameters
+model:
+    "mobilenetv3_small_100"
+pretrained:
+    True
+initial_checkpoint: # path of checkpoint to load after model is initialized
+    "/home/panq/vendor/pytorch-image-models/output/train/20220708-151123-mobilenetv3_small_100-32/model_best.pth.tar"
+resume:
+    ~
+no_resume_opt: # resume without loss and optimizer
+    False
+num_classes:
+    2
+gp: # Global pool type, one of (fast, avg, max, avgmax, avgmaxc). Model default if None.
+    ~
+img_size:
+    ~
+input_size: # input_size overrides in_chans
+    [1,160,32]
+batch_size:
+    128
+# Optimizer parameters
+opt: # opt_lower[sgd,momentum,sgdp,adam,adamw,adamp,nadam,radam,adamx, adabelirf,adadelta,adagrad,adafactor,lamb,lambc,larc,nlarc,nlars,madgrad,madgradw,novograd,rmsprop,ramsproptf,adahessian,fusedsgd,fusedmomentum,fusedadam,fusedadamw,fusedlamb,fusednovograd,,]
+    "adamw"
+weight_decay: # default:2e-5
+    2e-5
+sched:
+    "plateau" # [cosine tanh step multistep plateau poly]
+lr:
+    0.02
+min_lr:
+    2e-6
+epochs:
+    200
+bce_loss:
+    False
+workers:
+    10
+no_prefetcher:
+    False
+output:
+    "/home/panq/vendor/pytorch-image-models/out/mnv3_2"
+eval_metric:
+    "v_all"
+smoothing:
+    0.01

@@ -2,7 +2,13 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
+# PQ
+out/
+mn*/
+config/
+results/
+default_settings/
+wandb/
 # C extensions
 *.so
 
@@ -109,3 +115,4 @@ output/
 *.gz
 Untitled.ipynb
 Testing notebook.ipynb
+

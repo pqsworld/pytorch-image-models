@@ -264,8 +264,9 @@ def create_loader(
     loader_args = dict(
         batch_size=batch_size,
         shuffle=not isinstance(dataset, torch.utils.data.IterableDataset)
-        and sampler is None
-        and is_training,
+        and sampler is None,
+        # FIXME：shuffle in validate to handle 0 temporaly
+        # and sampler is None and is_training,
         num_workers=num_workers,
         sampler=sampler,
         collate_fn=collate_fn,

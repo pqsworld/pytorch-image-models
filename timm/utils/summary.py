@@ -5,10 +5,12 @@ Hacked together by / Copyright 2020 Ross Wightman
 import csv
 import os
 from collections import OrderedDict
-try: 
+
+try:
     import wandb
 except ImportError:
     pass
+
 
 def get_outdir(path, *paths, inc=False):
     outdir = os.path.join(path, *paths)
@@ -26,10 +28,26 @@ def get_outdir(path, *paths, inc=False):
     return outdir
 
 
-def update_summary(epoch, train_metrics, eval_metrics, filename, write_header=False, log_wandb=False):
+def update_summary(
+    epoch, train_metrics, eval_metrics, filename, write_header=False, log_wandb=False
+):
     rowd = OrderedDict(epoch=epoch)
     rowd.update([('train_' + k, v) for k, v in train_metrics.items()])
     rowd.update([('eval_' + k, v) for k, v in eval_metrics.items()])
+    if log_wandb:
+        wandb.log(rowd)
+    with open(filename, mode='a') as cf:
+        dw = csv.DictWriter(cf, fieldnames=rowd.keys())
+        if write_header:  # first iteration (epoch == 1 can't be used)
+            dw.writeheader()
+        dw.writerow(rowd)
+
+
+def update_summary_train(
+    epoch, train_metrics, filename, write_header=False, log_wandb=False
+):
+    rowd = OrderedDict(epoch=epoch)
+    rowd.update([('train_' + k, v) for k, v in train_metrics.items()])
     if log_wandb:
         wandb.log(rowd)
     with open(filename, mode='a') as cf:

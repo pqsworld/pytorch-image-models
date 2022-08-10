@@ -19,23 +19,43 @@ Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
 import argparse
 import logging
 import os
+import os.path as op
 import time
 from collections import OrderedDict
 from contextlib import suppress
 from datetime import datetime
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3,4,5,6,7"
+
 import torch
 import torch.nn as nn
 import torchvision.utils
 import yaml
 from torch.nn.parallel import DistributedDataParallel as NativeDDP
 
-from timm import utils
+import timm
+from timm.utils import (
+    dispatch_clip_grad,
+    update_summary,
+    update_summary_train,
+    distribute_bn,
+    AverageMeter,
+    CheckpointSaver,
+    ModelEmaV2,
+    accuracy_pos_neg,
+    get_outdir,
+    random_seed,
+    set_jit_fuser,
+    reduce_tensor,
+    ApexScaler,
+    NativeScaler,
+)
 from timm.data import (
     create_dataset,
     create_loader,
     resolve_data_config,
+    get_img_extensions,
+    add_img_extensions,
+    del_img_extensions,
     Mixup,
     FastCollateMixup,
     AugMixDataset,
@@ -57,7 +77,17 @@ from timm.models import (
 )
 from timm.optim import create_optimizer_v2, optimizer_kwargs
 from timm.scheduler import create_scheduler
-from timm.utils import ApexScaler, NativeScaler
+
+import chromalog
+from chromalog.mark import Mark
+from chromalog.mark.helpers.simple import (
+    success as SUCC,
+    error as ERR,
+    important,
+    debug as DBG,
+    warning as WARN,
+    critical,
+)
 
 try:
     from apex import amp
@@ -75,12 +105,10 @@ try:
 except AttributeError:
     pass
 
-try:
-    import wandb
+import wandb
 
-    has_wandb = True
-except ImportError:
-    has_wandb = False
+# from wandb.keras import WandbCallback
+
 
 try:
     from functorch.compile import memory_efficient_fusion
@@ -89,10 +117,10 @@ try:
 except ImportError as e:
     has_functorch = False
 
+os.environ["CUDA_VISIBLE_DEVICES"] = "3,4,5,6,7"
 torch.backends.cudnn.benchmark = True
 CUDA_LAUNCH_BLOCKING = 1
 
-_logger = logging.getLogger("train")
 
 # The first arg parser parses out only the --config argument, this argument is used to
 # load a yaml file containing key-values that override the defaults for the main parser below
@@ -103,7 +131,11 @@ parser.add_argument(
     "-c",
     "--config",
     # default="/home/panq/vendor/pytorch-image-models/config/config_default.yml",
-    default="/home/panq/vendor/pytorch-image-models/config/config_mvit_s_1.yml",
+    # default="/home/panq/vendor/pytorch-image-models/config/config_lif_base_pqcfg_valid6159_ddp_sweep.yml",
+    # default="/home/panq/vendor/pytorch-image-models/config/config_lif_base_pqcfg.yml",
+    default="/home/panq/vendor/pytorch-image-models/config/config_mn_adamw_lif_pretrain.yml",
+    # default="/home/panq/vendor/pytorch-image-models/config/config_mn_adamw_weighted.yml",
+    # default="/home/panq/vendor/pytorch-image-models/config/config_mn_adamw_300_512.yml",
     # default="/home/panq/vendor/pytorch-image-models/config/config_debug.yml",
     # default="",
     type=str,
@@ -116,7 +148,18 @@ parser = argparse.ArgumentParser(description="PyTorch ImageNet Training")
 
 # Dataset parameters
 group = parser.add_argument_group("Dataset parameters")
-
+parser.add_argument(
+    "--split-pos-neg",
+    action="store_false",
+    default=True,
+    help="split accuracy to positive and negitive spaces",
+)
+parser.add_argument(
+    "--use-valid",
+    action="store_false",
+    default=True,
+    help="whether to use validation dataset,default :True",
+)
 parser.add_argument(
     "--channels-1to3",
     action="store_false",
@@ -126,7 +169,7 @@ parser.add_argument(
 # Keep this argument outside of the dataset group because it is positional.
 parser.add_argument(
     "data_dir",
-    default="/hdd/file-input/panq/dataset/6159_splitd",
+    default="",
     metavar="DIR",
     help="path to dataset",
 )
@@ -146,8 +189,8 @@ group.add_argument(
 group.add_argument(
     "--val-split",
     metavar="NAME",
-    default="validation",
-    help="dataset validation split (default: validation)",
+    default="valid",
+    help="dataset validation split (default: valid)",
 )
 group.add_argument(
     "--dataset-download",
@@ -167,10 +210,10 @@ group.add_argument(
 group = parser.add_argument_group("Model parameters")
 group.add_argument(
     "--model",
-    default="resnet50",
+    default="mobilenetv3_small_100",
     type=str,
     metavar="MODEL",
-    help='Name of model to train (default: "resnet50"',
+    help='Name of model to train (default: "mobilenetv3_small_100"',
 )
 group.add_argument(
     "--pretrained",
@@ -736,7 +779,7 @@ group.add_argument(
 group.add_argument(
     "--log-interval",
     type=int,
-    default=50,
+    default=20,
     metavar="N",
     help="how many batches to wait before logging training status",
 )
@@ -758,14 +801,14 @@ group.add_argument(
     "-j",
     "--workers",
     type=int,
-    default=4,
+    default=16,
     metavar="N",
-    help="how many training processes to use (default: 4)",
+    help="how many training processes to use (default: 16)",
 )
 group.add_argument(
     "--save-images",
-    action="store_true",
-    default=False,
+    action="store_false",
+    default=True,
     help="save images of input bathes every log interval for debugging",
 )
 group.add_argument(
@@ -795,7 +838,7 @@ group.add_argument(
 group.add_argument(
     "--pin-mem",
     action="store_true",
-    default=False,
+    default=True,
     help="Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.",
 )
 group.add_argument(
@@ -820,10 +863,10 @@ group.add_argument(
 )
 group.add_argument(
     "--eval-metric",
-    default="top1",
+    default="v_all",
     type=str,
     metavar="EVAL_METRIC",
-    help='Best metric (default: "top1"',
+    help='Best metric (default: "v_all"',
 )
 group.add_argument(
     "--tta",
@@ -842,21 +885,40 @@ group.add_argument(
 group.add_argument(
     "--log-wandb",
     action="store_true",
-    default=False,
+    default=True,
     help="log training and validation metrics to wandb",
 )
+global _logger
+_logger = logging.getLogger(name="r")
+
+
+def set_logger(out_path):
+    # logger
+    chromalog.basicConfig(format="%(message)s", level=logging.DEBUG)
+
+    _logger.setLevel(logging.DEBUG)
+    formatter = logging.Formatter(
+        "[%(levelname)1.1s][%(asctime)s.%(msecs)03d][%(lineno)d]: %(message)s",
+        datefmt="%Y/%m/%d %H:%M:%S",
+    )
+    fh = logging.FileHandler(os.path.join(out_path, "logging.log"))
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(formatter)
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.DEBUG)
+    ch.setFormatter(formatter)
+    _logger.addHandler(ch)
+    _logger.addHandler(fh)
 
 
 def _parse_args():
     # Do we have a config file to parse?
     args_config, remaining = config_parser.parse_known_args()
     if args_config.config:
-        _logger.debug("CFG file: {0}".format(args_config.config))
+        print("CFG file: {0}".format(args_config.config))
         with open(args_config.config, "r") as f:
             cfg = yaml.safe_load(f)
-            _logger.debug(
-                f"CFG file add {len(cfg)} new params.Make sure you are handling it."
-            )
+            print("CFG file add %d new params.Make sure you are handling it.", len(cfg))
             parser.set_defaults(**cfg)
 
     # The main arg parser parses the rest of the args, the usual
@@ -869,18 +931,19 @@ def _parse_args():
 
 
 def main():
-    utils.setup_default_logging(
-        default_level=logging.DEBUG,
-    )
-    args, args_text = _parse_args()
+    # setup checkpoint saver and eval metric tracking
 
+    args, args_text = _parse_args()
     args.prefetcher = not args.no_prefetcher
     args.distributed = False
     if "WORLD_SIZE" in os.environ:
         args.distributed = int(os.environ["WORLD_SIZE"]) > 1
+    args.rank = 0
     args.device = "cuda:0"
     args.world_size = 1
-    args.rank = 0  # global rank
+    # FIXME: save
+    args.save_images = True
+
     if args.distributed:
         if 'LOCAL_RANK' in os.environ:
             args.local_rank = int(os.getenv('LOCAL_RANK'))
@@ -897,14 +960,29 @@ def main():
         _logger.info("Training with a single process on 1 GPUs.")
     assert args.rank >= 0
 
+    if args.rank == 0:
+        name_exp = "-".join(
+            [
+                datetime.now().strftime("%Y%m%d-%H%M%S"),
+                safe_model_name(args.model),
+            ]
+        )
+        logger_dir = get_outdir(
+            args.output if args.output else "./output/default",
+            name_exp,
+            "logger",
+            inc=False,
+        )
+
+        set_logger(logger_dir)
+        # utils.setup_default_logging(default_level=logging.DEBUG,)
+        # _logger.addHandler(logging.FileHandler(op.join(output_dir,'logger.log')))
+        _logger.info("log saved to %s/logger.log", logger_dir)
+        time.sleep(5)
+
     if args.rank == 0 and args.log_wandb:
-        if has_wandb:
-            wandb.init(project=args.experiment, config=args)
-        else:
-            _logger.warning(
-                "You've requested to log metrics to wandb but package not found. "
-                "Metrics not being logged to wandb, try `pip install wandb`"
-            )
+        wandb.init(project=args.experiment, config=args)
+        wandb.config.update(args)
 
     # resolve AMP arguments based on PyTorch / Apex availability
     use_amp = None
@@ -924,10 +1002,10 @@ def main():
             "Install NVIDA apex or upgrade to PyTorch 1.6"
         )
 
-    utils.random_seed(args.seed, args.rank)
+    random_seed(args.seed, args.rank)
 
     if args.fuser:
-        utils.set_jit_fuser(args.fuser)
+        set_jit_fuser(args.fuser)
 
     model = create_model(
         args.model,
@@ -1037,7 +1115,7 @@ def main():
     model_ema = None
     if args.model_ema:
         # Important to create EMA model after cuda(), DP wrapper, and AMP but before DDP wrapper
-        model_ema = utils.ModelEmaV2(
+        model_ema = ModelEmaV2(
             model,
             decay=args.model_ema_decay,
             device="cpu" if args.model_ema_force_cpu else None,
@@ -1077,6 +1155,7 @@ def main():
         _logger.info("Scheduled epochs: {}".format(num_epochs))
 
     # create the train and eval datasets
+    add_img_extensions(".bmp")
     dataset_train = create_dataset(
         args.dataset,
         root=args.data_dir,
@@ -1213,14 +1292,13 @@ def main():
                 [
                     datetime.now().strftime("%Y%m%d-%H%M%S"),
                     safe_model_name(args.model),
-                    str(data_config["input_size"][-1]),
                 ]
             )
-        output_dir = utils.get_outdir(
+        output_dir = get_outdir(
             args.output if args.output else "./output/train", exp_name
         )
         decreasing = True if eval_metric == "loss" else False
-        saver = utils.CheckpointSaver(
+        saver = CheckpointSaver(
             model=model,
             optimizer=optimizer,
             args=args,
@@ -1231,7 +1309,7 @@ def main():
             decreasing=decreasing,
             max_history=args.checkpoint_hist,
         )
-        with open(os.path.join(output_dir, "args.yaml"), "w") as f:
+        with open(op.join(output_dir, "args.yaml"), "w") as f:
             f.write(args_text)
 
     try:
@@ -1258,44 +1336,63 @@ def main():
             if args.distributed and args.dist_bn in ("broadcast", "reduce"):
                 if args.local_rank == 0:
                     _logger.info("Distributing BatchNorm running means and vars")
-                utils.distribute_bn(model, args.world_size, args.dist_bn == "reduce")
+                distribute_bn(model, args.world_size, args.dist_bn == "reduce")
 
-            eval_metrics = validate(
-                model, loader_eval, validate_loss_fn, args, amp_autocast=amp_autocast
-            )
-
-            if model_ema is not None and not args.model_ema_force_cpu:
-                if args.distributed and args.dist_bn in ("broadcast", "reduce"):
-                    utils.distribute_bn(
-                        model_ema, args.world_size, args.dist_bn == "reduce"
-                    )
-                ema_eval_metrics = validate(
-                    model_ema.module,
+            if args.use_valid:
+                eval_metrics = validate(
+                    model,
                     loader_eval,
                     validate_loss_fn,
                     args,
                     amp_autocast=amp_autocast,
-                    log_suffix=" (EMA)",
                 )
-                eval_metrics = ema_eval_metrics
+
+            if model_ema is not None and not args.model_ema_force_cpu:
+                if args.distributed and args.dist_bn in ("broadcast", "reduce"):
+                    distribute_bn(model_ema, args.world_size, args.dist_bn == "reduce")
+                if args.use_valid:
+                    ema_eval_metrics = validate(
+                        model_ema.module,
+                        loader_eval,
+                        validate_loss_fn,
+                        args,
+                        amp_autocast=amp_autocast,
+                        log_suffix=" (EMA)",
+                    )
+                    eval_metrics = ema_eval_metrics
 
             if lr_scheduler is not None:
                 # step LR for next epoch
-                lr_scheduler.step(epoch + 1, eval_metrics[eval_metric])
+                if args.use_valid:
+                    lr_scheduler.step(epoch + 1, eval_metrics[eval_metric])
+                else:
+                    lr_scheduler.step(epoch + 1, train_metrics[eval_metric])
 
             if output_dir is not None:
-                utils.update_summary(
-                    epoch,
-                    train_metrics,
-                    eval_metrics,
-                    os.path.join(output_dir, "summary.csv"),
-                    write_header=best_metric is None,
-                    log_wandb=args.log_wandb and has_wandb,
-                )
+                if args.use_valid:
+                    update_summary(
+                        epoch,
+                        train_metrics,
+                        eval_metrics,
+                        op.join(output_dir, "summary_all.csv"),
+                        write_header=best_metric is None,
+                        log_wandb=args.log_wandb,
+                    )
+                else:
+                    update_summary_train(
+                        epoch,
+                        train_metrics,
+                        op.join(output_dir, "summary_train.csv"),
+                        write_header=best_metric is None,
+                        log_wandb=args.log_wandb,
+                    )
 
             if saver is not None:
                 # save proper checkpoint with eval metric
-                save_metric = eval_metrics[eval_metric]
+                if args.use_valid:
+                    save_metric = eval_metrics[eval_metric]
+                else:
+                    save_metric = train_metrics[eval_metric]
                 best_metric, best_epoch = saver.save_checkpoint(
                     epoch, metric=save_metric
                 )
@@ -1329,9 +1426,12 @@ def train_one_epoch(
             mixup_fn.mixup_enabled = False
 
     second_order = hasattr(optimizer, "is_second_order") and optimizer.is_second_order
-    batch_time_m = utils.AverageMeter()
-    data_time_m = utils.AverageMeter()
-    losses_m = utils.AverageMeter()
+    batch_time_m = AverageMeter()
+    data_time_m = AverageMeter()
+    losses_m = AverageMeter()
+    t_all_m = AverageMeter()
+    t_pos_m = AverageMeter()
+    t_neg_m = AverageMeter()
 
     model.train()
 
@@ -1370,7 +1470,7 @@ def train_one_epoch(
         else:
             loss.backward(create_graph=second_order)
             if args.clip_grad is not None:
-                utils.dispatch_clip_grad(
+                dispatch_clip_grad(
                     model_parameters(model, exclude_head="agc" in args.clip_mode),
                     value=args.clip_grad,
                     mode=args.clip_mode,
@@ -1383,13 +1483,24 @@ def train_one_epoch(
         torch.cuda.synchronize()
         num_updates += 1
         batch_time_m.update(time.time() - end)
-        if last_batch or batch_idx % args.log_interval == 0:
+
+        # 非必要性打印t_accu
+        if batch_idx == 0 or last_batch or batch_idx % args.log_interval == 0:
             lrl = [param_group["lr"] for param_group in optimizer.param_groups]
             lr = sum(lrl) / len(lrl)
+            t_accu = {}
+            t_accu = accuracy_pos_neg(output, target, args.split_pos_neg)
 
             if args.distributed:
-                reduced_loss = utils.reduce_tensor(loss.data, args.world_size)
+                # _logger.info("Distributed:args.world_size{0}".format(args.world_size))
+                reduced_loss = reduce_tensor(loss.data, args.world_size)
+                t_accu["all"] = reduce_tensor(t_accu["all"], args.world_size)
+                t_accu["pos"] = reduce_tensor(t_accu["pos"], args.world_size)
+                t_accu["neg"] = reduce_tensor(t_accu["neg"], args.world_size)
                 losses_m.update(reduced_loss.item(), input.size(0))
+            t_all_m.update(t_accu["all"].item(), target.size(0))
+            t_pos_m.update(t_accu["pos"].item(), (target == 1).sum(0).item())
+            t_neg_m.update(t_accu["neg"].item(), (target == 0).sum(0).item())
 
             if args.local_rank == 0:
                 _logger.info(
@@ -1398,7 +1509,10 @@ def train_one_epoch(
                     "Time: {batch_time.val:.3f}s, {rate:>7.2f}/s  "
                     "({batch_time.avg:.3f}s, {rate_avg:>7.2f}/s)  "
                     "LR: {lr:.3e}  "
-                    "Data: {data_time.val:.3f} ({data_time.avg:.3f})".format(
+                    "Data: {data_time.val:.3f} ({data_time.avg:.3f})"
+                    "Acc@All: {tam.val:>7.4f} ({tam.avg:>7.4f})  "
+                    "Acc@Pos: {tpm.val:>7.4f} ({tpm.avg:>7.4f})  "
+                    "Acc@Neg: {tnm.val:>7.4f} ({tnm.avg:>7.4f})  ".format(
                         epoch,
                         batch_idx,
                         len(loader),
@@ -1409,13 +1523,16 @@ def train_one_epoch(
                         rate_avg=input.size(0) * args.world_size / batch_time_m.avg,
                         lr=lr,
                         data_time=data_time_m,
+                        tam=t_all_m,
+                        tpm=t_pos_m,
+                        tnm=t_neg_m,
                     )
                 )
 
                 if args.save_images and output_dir:
                     torchvision.utils.save_image(
                         input,
-                        os.path.join(output_dir, "train-batch-%d.jpg" % batch_idx),
+                        op.join(output_dir, "train-batch-%d.jpg" % batch_idx),
                         padding=0,
                         normalize=True,
                     )
@@ -1435,15 +1552,23 @@ def train_one_epoch(
 
     if hasattr(optimizer, "sync_lookahead"):
         optimizer.sync_lookahead()
-
-    return OrderedDict([("loss", losses_m.avg)])
+    metrics = OrderedDict(
+        [
+            ("loss", losses_m.avg),
+            ("t_all", t_all_m.avg),
+            ("t_pos", t_pos_m.avg),
+            ("t_neg", t_neg_m.avg),
+        ]
+    )
+    return metrics
 
 
 def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix=""):
-    batch_time_m = utils.AverageMeter()
-    losses_m = utils.AverageMeter()
-    top1_m = utils.AverageMeter()
-    top5_m = utils.AverageMeter()
+    batch_time_m = AverageMeter()
+    losses_m = AverageMeter()
+    v_all_m = AverageMeter()
+    v_pos_m = AverageMeter()
+    v_neg_m = AverageMeter()
 
     model.eval()
 
@@ -1470,21 +1595,24 @@ def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix="")
                 target = target[0 : target.size(0) : reduce_factor]
 
             loss = loss_fn(output, target)
-            acc1, acc5 = utils.accuracy(output, target, topk=(1, 5))
+            v_accu = {}
+            v_accu = accuracy_pos_neg(output, target, args.split_pos_neg)
 
             if args.distributed:
-                reduced_loss = utils.reduce_tensor(loss.data, args.world_size)
-                acc1 = utils.reduce_tensor(acc1, args.world_size)
-                acc5 = utils.reduce_tensor(acc5, args.world_size)
+                reduced_loss = reduce_tensor(loss.data, args.world_size)
+                v_accu["all"] = reduce_tensor(v_accu["all"], args.world_size)
+                v_accu["pos"] = reduce_tensor(v_accu["pos"], args.world_size)
+                v_accu["neg"] = reduce_tensor(v_accu["neg"], args.world_size)
+
             else:
                 reduced_loss = loss.data
 
             torch.cuda.synchronize()
 
             losses_m.update(reduced_loss.item(), input.size(0))
-            top1_m.update(acc1.item(), output.size(0))
-            top5_m.update(acc5.item(), output.size(0))
-
+            v_all_m.update(v_accu["all"].item(), target.size(0))
+            v_pos_m.update(v_accu["pos"].item(), (target == 1).sum(0).item())
+            v_neg_m.update(v_accu["neg"].item(), (target == 0).sum(0).item())
             batch_time_m.update(time.time() - end)
             end = time.time()
             if args.local_rank == 0 and (
@@ -1495,20 +1623,27 @@ def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix="")
                     "{0}: [{1:>4d}/{2}]  "
                     "Time: {batch_time.val:.3f} ({batch_time.avg:.3f})  "
                     "Loss: {loss.val:>7.4f} ({loss.avg:>6.4f})  "
-                    "Acc@1: {top1.val:>7.4f} ({top1.avg:>7.4f})  "
-                    "Acc@5: {top5.val:>7.4f} ({top5.avg:>7.4f})".format(
+                    "Acc@all: {vam.val:>7.4f} ({vam.avg:>7.4f})  "
+                    "Acc@Pos: {vpm.val:>7.4f} ({vpm.avg:>7.4f})  "
+                    "Acc@Neg: {vnm.val:>7.4f} ({vnm.avg:>7.4f})  ".format(
                         log_name,
                         batch_idx,
                         last_idx,
                         batch_time=batch_time_m,
                         loss=losses_m,
-                        top1=top1_m,
-                        top5=top5_m,
+                        vam=v_all_m,
+                        vpm=v_pos_m,
+                        vnm=v_neg_m,
                     )
                 )
 
     metrics = OrderedDict(
-        [("loss", losses_m.avg), ("top1", top1_m.avg), ("top5", top5_m.avg)]
+        [
+            ("loss", losses_m.avg),
+            ("v_all", v_all_m.avg),
+            ("v_pos", v_pos_m.avg),
+            ("v_neg", v_neg_m.avg),
+        ]
     )
 
     return metrics
